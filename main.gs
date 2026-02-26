@@ -3,14 +3,11 @@
 // ============================================================================
 /**
  * One-time setup function to store your Spotify credentials securely
- * Run this once from the Google Apps Script editor, then you can delete it
+ * Run this once from the Apps Script editor, then you can delete it
  */
 function setupSpotifyCredentials() {
   const props = PropertiesService.getScriptProperties();
-  /**
-  * ClientID and Secret are found https://developer.spotify.com/dashboard/applications
-  * PlaylistID are found in open.spotify.com and click the playlist name which you own or have rights to edit. It should be 22 random characters
-  */
+  
   props.setProperties({
        'SPOTIFY_CLIENT_ID': '',
        'SPOTIFY_CLIENT_SECRET': '',
@@ -43,14 +40,14 @@ function getSpotifyCredentials() {
  */
 function viewStoredCredentials() {
   const creds = getSpotifyCredentials();
-  console.log('Client ID:', creds.clientId ? 'Set' : 'Not set');
-  console.log('Client Secret:', creds.clientSecret ? 'Set' : 'Not set');
-  console.log('Playlist ID:', creds.playlistId ? 'Set' : 'Not set');
+  console.log('Client ID:', creds.clientId ? '✅ Set' : '❌ Not set');
+  console.log('Client Secret:', creds.clientSecret ? '✅ Set' : '❌ Not set');
+  console.log('Playlist ID:', creds.playlistId ? '✅ Set' : '❌ Not set');
 }
 
 const CONFIG = {
   // Data Source
-  githubJsonUrl: "https://raw.githubusercontent.com/benpetersen/MusicPlaylistTracker/refs/heads/main/93.3%20Recently%20Played%2012-20-2025.json",
+  githubJsonUrl: "https://raw.githubusercontent.com/benpetersen/MusicPlaylistTracker/refs/heads/main/93.3%20Recently%20Played%202-26-26.json",
   
   // JSON Processing
   columnDataStarts: 5,
@@ -66,7 +63,7 @@ const CONFIG = {
     
     // Other settings
     maxUrisPerRequest: 100,
-    searchLimit: 15,
+    searchLimit: 10, // [CHANGED] API max is now 10 (was 50)
     baseUrl: "https://api.spotify.com",
     scopes: "user-library-read playlist-modify-public playlist-modify-private",
     preferCleanVersions: true, // Set to false to allow explicit tracks
@@ -792,14 +789,15 @@ function determinePlaylistActions(matchResults, currentPlaylist) {
   }
   
   // Determine which playlist songs to remove
-  for (const playlistTrack of currentPlaylist) {
-    const normalizedTitle = normalizeString(playlistTrack.track.name);
+  // [CHANGED] Playlist response now uses "item" instead of "track" (API Feb 2026)
+  for (const playlistEntry of currentPlaylist) {
+    const normalizedTitle = normalizeString(playlistEntry.item.name);
     
     if (!matchedSongsMap.has(normalizedTitle)) {
       actions.removeFromPlaylist.push({
-        song: playlistTrack.track.name,
-        artist: playlistTrack.track.artists[0].name,
-        uri: playlistTrack.track.uri,
+        song: playlistEntry.item.name,
+        artist: playlistEntry.item.artists[0].name,
+        uri: playlistEntry.item.uri,
         success: true
       });
     }
@@ -824,13 +822,14 @@ function createSongMap(matchedSongs) {
 
 /**
  * Creates a map of playlist tracks for quick lookup
+ * [CHANGED] Playlist response now uses "item" instead of "track" (API Feb 2026)
  */
 function createPlaylistMap(playlistTracks) {
   const map = new Map();
   
-  for (const item of playlistTracks) {
-    const normalizedTitle = normalizeString(item.track.name);
-    map.set(normalizedTitle, item);
+  for (const entry of playlistTracks) {
+    const normalizedTitle = normalizeString(entry.item.name);
+    map.set(normalizedTitle, entry);
   }
   
   return map;
@@ -961,15 +960,15 @@ const SpotifyAPI = {
 
   /**
    * Searches for a track with strict matching (query format)
-   * Optionally filters for clean versions
+   * [CHANGED] Search limit capped at 10 (API Feb 2026 reduced max from 50 to 10)
    */
   searchTrackStrict(songName, artistName) {
     // Clean and encode search terms
     const cleanSong = songName.replace(/&/g, "").replace(/ /g, "+");
     const cleanArtist = artistName.replace(/&/g, "").replace(/ /g, "+");
     
-    // Increase limit if we're filtering for clean versions to have more options
-    const limit = CONFIG.spotify.preferCleanVersions ? 30 : CONFIG.spotify.searchLimit;
+    // [CHANGED] API now enforces a maximum limit of 10; clamp to avoid errors
+    const limit = Math.min(CONFIG.spotify.searchLimit, 10);
     
     const endpoint = `/v1/search?query=${cleanSong}%26artist%3A${cleanArtist}&type=track&market=US&locale=en-US&limit=${limit}`;
     
@@ -979,15 +978,15 @@ const SpotifyAPI = {
 
   /**
    * Searches for a track with broad matching (name:song artist:artist format)
-   * Optionally filters for clean versions
+   * [CHANGED] Search limit capped at 10 (API Feb 2026 reduced max from 50 to 10)
    */
   searchTrackBroad(songName, artistName) {
     // Clean and encode search terms
     const cleanSong = songName.replace(/&/g, "").replace(/ /g, "+");
     const cleanArtist = artistName.replace(/&/g, "").replace(/ /g, "+");
     
-    // Increase limit if we're filtering for clean versions to have more options
-    const limit = CONFIG.spotify.preferCleanVersions ? 30 : CONFIG.spotify.searchLimit;
+    // [CHANGED] API now enforces a maximum limit of 10; clamp to avoid errors
+    const limit = Math.min(CONFIG.spotify.searchLimit, 10);
     
     const endpoint = `/v1/search?q=name:${cleanSong}%26artist%3A${cleanArtist}&type=track&market=US&locale=en-US&limit=${limit}`;
     
@@ -997,13 +996,17 @@ const SpotifyAPI = {
 
   /**
    * Gets all tracks from a playlist
+   * [CHANGED] Endpoint updated from /tracks to /items (API Feb 2026)
+   * [CHANGED] fields parameter updated: items.track -> items.item (API Feb 2026)
+   * [CHANGED] Response parsing updated: item.track -> item.item (API Feb 2026)
    */
   getPlaylistTracks(playlistId) {
     const limit = 100;
     let offset = 0;
     let allTracks = [];
     
-    const endpoint = `/v1/playlists/${playlistId}/tracks?fields=items(track(name,artists,uri)),snapshot_id&limit=${limit}`;
+    // [CHANGED] /tracks -> /items, and field name track -> item
+    const endpoint = `/v1/playlists/${playlistId}/items?fields=items(item(name,artists,uri)),snapshot_id&limit=${limit}`;
     
     // Paginate through all tracks
     while (true) {
@@ -1014,8 +1017,8 @@ const SpotifyAPI = {
         break;
       }
       
-      // Filter out null tracks (can happen with local files or removed tracks)
-      const validTracks = result.items.filter(item => item.track != null);
+      // [CHANGED] Filter using item instead of track
+      const validTracks = result.items.filter(entry => entry.item != null);
       allTracks = allTracks.concat(validTracks);
       
       // Store snapshot_id on first iteration
@@ -1035,6 +1038,7 @@ const SpotifyAPI = {
 
   /**
    * Adds tracks to a playlist at a specific position
+   * [CHANGED] Endpoint updated from /tracks to /items (API Feb 2026)
    */
   addTracks(playlistId, uris, position = 0) {
     if (!uris || uris.length === 0) {
@@ -1042,8 +1046,9 @@ const SpotifyAPI = {
       return;
     }
     
-    const endpoint = `/v1/playlists/${playlistId}/tracks?position=${position}`;
-    const payload = { uris };
+    // [CHANGED] /tracks -> /items
+    const endpoint = `/v1/playlists/${playlistId}/items`;
+    const payload = { uris, position };
     
     return this._makeRequest(endpoint, {
       method: "POST",
@@ -1054,6 +1059,7 @@ const SpotifyAPI = {
 
   /**
    * Removes tracks from a playlist (handles batching automatically)
+   * [CHANGED] Endpoint updated from /tracks to /items (API Feb 2026)
    */
   removeTracks(playlistId, uris) {
     if (!uris || uris.length === 0) {
@@ -1079,9 +1085,10 @@ const SpotifyAPI = {
       // Format URIs for delete request
       const tracks = batch.map(uri => ({ uri }));
       
-      const endpoint = `/v1/playlists/${playlistId}/tracks`;
+      // [CHANGED] /tracks -> /items
+      const endpoint = `/v1/playlists/${playlistId}/items`;
       const payload = {
-        tracks,
+        items: tracks,
         snapshot_id: snapshotId
       };
       
